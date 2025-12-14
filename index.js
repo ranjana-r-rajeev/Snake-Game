@@ -10,7 +10,8 @@ var isGameOver = false;
 var animationId = null;
 
 // Difficulty Settings
-var loopSpeed = 5; // Default Medium (skip 5 frames - slower than before)
+var loopSpeed = 10; // Default Medium (skip 10 frames)
+var startSpeed = 10; // To track initial setting for resets
 var hasObstacles = false;
 var obstacles = [];
 
@@ -146,6 +147,9 @@ function resetGame() {
   score = 0;
   scoreEl.textContent = score;
 
+  // Reset speed
+  loopSpeed = startSpeed;
+
   // Regenerate apple
   apple.x = getRandomInt(0, 25) * grid;
   apple.y = getRandomInt(0, 25) * grid;
@@ -261,6 +265,12 @@ function loop() {
 
       playSound('eat'); // Play eat sound
 
+      // Progressive Speed: Increase speed every 5 points
+      // We limit max speed to 4 (Hardest)
+      if (score % 5 === 0 && loopSpeed > 4) {
+        loopSpeed--;
+      }
+
       apple.x = getRandomInt(0, 25) * grid;
       apple.y = getRandomInt(0, 25) * grid;
 
@@ -353,7 +363,8 @@ difficultyBtns.forEach(btn => {
     this.classList.add('selected');
 
     // Update settings
-    loopSpeed = parseInt(this.dataset.speed);
+    startSpeed = parseInt(this.dataset.speed);
+    loopSpeed = startSpeed;
     hasObstacles = this.dataset.obstacles === 'true';
   });
 });
