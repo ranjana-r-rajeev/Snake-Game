@@ -1,138 +1,374 @@
 var canvas = document.getElementById('game');
 var context = canvas.getContext('2d');
 
+// Game State
 var grid = 16;
 var count = 0;
-  
+var score = 0;
+var highScore = localStorage.getItem('snakeHighScore') || 0;
+var isGameOver = false;
+var animationId = null;
+
+// Difficulty Settings
+var loopSpeed = 5; // Default Medium (skip 5 frames - slower than before)
+var hasObstacles = false;
+var obstacles = [];
+
+// Sound Effects (Web Audio API)
+var audioCtx;
+try {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+} catch (e) {
+  console.warn('Web Audio API not supported');
+}
+
+function playSound(type) {
+  if (!audioCtx) return;
+
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(e => console.log(e));
+  }
+
+  var oscillator = audioCtx.createOscillator();
+  var gainNode = audioCtx.createGain();
+
+  oscillator.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+
+  if (type === 'eat') {
+    // High pitched "ding"
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(1000, audioCtx.currentTime + 0.1);
+
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.1);
+  } else if (type === 'gameover') {
+    // Low pitched "crash"
+    oscillator.type = 'sawtooth';
+    oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.3);
+
+    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.3);
+  }
+}
+
+// DOM Elements
+var scoreEl = document.getElementById('score');
+var highScoreEl = document.getElementById('highScore');
+var finalScoreEl = document.getElementById('finalScore');
+var modal = document.getElementById('gameOverModal');
+var restartBtn = document.getElementById('restartBtn');
+var homeBtn = document.getElementById('homeBtn');
+
+// Pause Elements
+var pauseBtn = document.getElementById('pauseBtn');
+var pauseOverlay = document.getElementById('pauseOverlay');
+var isPaused = false;
+
+// Start Screen Elements
+var startModal = document.getElementById('startModal');
+var startBtn = document.getElementById('startBtn');
+var difficultyBtns = document.querySelectorAll('.btn-difficulty');
+
+// Initialize UI
+highScoreEl.textContent = highScore;
+
 var snake = {
   x: 160,
   y: 160,
-  
-  // snake velocity. moves one grid length every frame in either the x or y direction
   dx: grid,
   dy: 0,
-  
-  // keep track of all grids the snake body occupies
   cells: [],
-  
-  // length of the snake. grows when eating an apple
   maxCells: 4
 };
+
 var apple = {
   x: 320,
   y: 320
 };
 
-// get random whole numbers in a specific range
-// @see https://stackoverflow.com/a/1527820/2124254
 function getRandomInt(min, max) {
   return Math.floor(Math.random() * (max - min)) + min;
 }
 
-function loop() {
-  requestAnimationFrame(loop);
+function generateObstacles() {
+  obstacles = [];
+  if (!hasObstacles) return;
 
-  // slow game loop to 15 fps instead of 60 (60/15 = 4)
-  if (++count < 4) {
+  // Generate 5 random obstacles
+  for (let i = 0; i < 5; i++) {
+    let obsX = getRandomInt(0, 25) * grid;
+    let obsY = getRandomInt(0, 25) * grid;
+
+    // Ensure obstacle doesn't spawn on snake or apple (simple check)
+    if ((obsX === snake.x && obsY === snake.y) ||
+      (obsX === apple.x && obsY === apple.y)) {
+      i--; // retry
+      continue;
+    }
+    obstacles.push({ x: obsX, y: obsY });
+  }
+}
+
+function togglePause() {
+  if (isGameOver || startModal.classList.contains('hidden') === false) return;
+
+  isPaused = !isPaused;
+
+  if (isPaused) {
+    pauseOverlay.classList.remove('hidden');
+    pauseBtn.textContent = '▶ RESUME';
+    pauseBtn.classList.add('active');
+  } else {
+    pauseOverlay.classList.add('hidden');
+    pauseBtn.textContent = '❚❚ PAUSE';
+    pauseBtn.classList.remove('active');
+  }
+}
+
+// Reset the game state
+function resetGame() {
+  snake.x = 160;
+  snake.y = 160;
+  snake.cells = [];
+  snake.maxCells = 4;
+  snake.dx = grid;
+  snake.dy = 0;
+
+  score = 0;
+  scoreEl.textContent = score;
+
+  // Regenerate apple
+  apple.x = getRandomInt(0, 25) * grid;
+  apple.y = getRandomInt(0, 25) * grid;
+
+  // Regenerate obstacles based on current settings
+  generateObstacles();
+
+  isGameOver = false;
+  isPaused = false;
+  modal.classList.add('hidden');
+  pauseOverlay.classList.add('hidden');
+  pauseBtn.textContent = '❚❚ PAUSE';
+  pauseBtn.classList.remove('active');
+  pauseBtn.classList.remove('hidden');
+
+  // Restart loop
+  cancelAnimationFrame(animationId);
+  requestAnimationFrame(loop);
+}
+
+function goHome() {
+  modal.classList.add('hidden');
+  startModal.classList.remove('hidden');
+  pauseBtn.classList.add('hidden');
+}
+
+function endGame() {
+  // Play sound only once
+  if (!isGameOver) {
+    playSound('gameover');
+  }
+
+  isGameOver = true;
+
+  // Update High Score
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem('snakeHighScore', highScore);
+    highScoreEl.textContent = highScore;
+  }
+
+  finalScoreEl.textContent = score;
+  modal.classList.remove('hidden');
+  pauseBtn.classList.add('hidden');
+}
+
+function loop() {
+  if (isGameOver) return;
+
+  animationId = requestAnimationFrame(loop);
+
+  if (isPaused) return;
+
+  // Variable Game Speed
+  if (++count < loopSpeed) {
     return;
   }
 
   count = 0;
-  context.clearRect(0,0,canvas.width,canvas.height);
+  context.clearRect(0, 0, canvas.width, canvas.height);
 
-  // move snake by it's velocity
   snake.x += snake.dx;
   snake.y += snake.dy;
 
-  // check if snake is outside canvas boundaries
+  // Wrap around logic (Optional: modern snake usually dies on wall, but keeping wall death as per original code behavior)
+  // Original code reset on wall hit. Let's make it Game Over.
   if (snake.x < 0 || snake.x >= canvas.width || snake.y < 0 || snake.y >= canvas.height) {
-    // reset game
-    snake.x = 160;
-    snake.y = 160;
-    snake.cells = [];
-    snake.maxCells = 4;
-    snake.dx = grid;
-    snake.dy = 0;
-
-    apple.x = getRandomInt(0, 25) * grid;
-    apple.y = getRandomInt(0, 25) * grid;
+    endGame();
+    return;
   }
 
-  // keep track of where snake has been. front of the array is always the head
-  snake.cells.unshift({x: snake.x, y: snake.y});
+  snake.cells.unshift({ x: snake.x, y: snake.y });
 
-  // remove cells as we move away from them
   if (snake.cells.length > snake.maxCells) {
     snake.cells.pop();
   }
 
-  // draw apple
-  context.fillStyle = 'red';
-  context.fillRect(apple.x, apple.y, grid-1, grid-1);
+  // Draw Apple
+  context.fillStyle = '#ef4444'; // Red-500
+  // Make apple a bit smaller specifically for visual flair
+  context.beginPath();
+  context.arc(apple.x + grid / 2, apple.y + grid / 2, grid / 2 - 2, 0, 2 * Math.PI);
+  context.fill();
 
-  // draw snake one cell at a time
-  context.fillStyle = 'green';
-  snake.cells.forEach(function(cell, index) {
+  // Draw Obstacles
+  if (hasObstacles) {
+    context.fillStyle = '#64748b'; // Slate-500
+    obstacles.forEach(function (obs) {
+      context.fillRect(obs.x, obs.y, grid - 1, grid - 1);
 
-    // drawing 1 px smaller than the grid creates a grid effect in the snake body so you can see how long it is
-    context.fillRect(cell.x, cell.y, grid-1, grid-1);  
+      // Collision with obstacle
+      if (snake.x === obs.x && snake.y === obs.y) {
+        endGame();
+      }
+    });
+  }
 
-    // snake ate apple
-    if (cell.x === apple.x && cell.y === apple.y) {
-      snake.maxCells++;
-
-      // canvas is 400x400 which is 25x25 grids 
-      apple.x = getRandomInt(0, 25) * grid;
-      apple.y = getRandomInt(0, 25) * grid;
+  // Draw Snake
+  context.fillStyle = '#10b981'; // Emerald-500
+  snake.cells.forEach(function (cell, index) {
+    if (index === 0) {
+      context.fillStyle = '#34d399'; // Emerald-400
+    } else {
+      context.fillStyle = '#10b981';
     }
 
-    // check collision with all cells after this one (modified bubble sort)
+    context.fillRect(cell.x, cell.y, grid - 1, grid - 1);
+
+    if (cell.x === apple.x && cell.y === apple.y) {
+      snake.maxCells++;
+      score++;
+      scoreEl.textContent = score;
+
+      playSound('eat'); // Play eat sound
+
+      apple.x = getRandomInt(0, 25) * grid;
+      apple.y = getRandomInt(0, 25) * grid;
+
+      // Ensure apple doesn't spawn on obstacle
+      if (hasObstacles) {
+        obstacles.forEach(obs => {
+          if (apple.x === obs.x && apple.y === obs.y) {
+            apple.x = getRandomInt(0, 25) * grid;
+            apple.y = getRandomInt(0, 25) * grid;
+          }
+        });
+      }
+    }
+
     for (var i = index + 1; i < snake.cells.length; i++) {
-
-      // snake occupies same space as a body part. reset game
       if (cell.x === snake.cells[i].x && cell.y === snake.cells[i].y) {
-        snake.x = 160;
-        snake.y = 160;
-        snake.cells = [];
-        snake.maxCells = 4;
-        snake.dx = grid;
-        snake.dy = 0;
-
-        apple.x = getRandomInt(0, 25) * grid;
-        apple.y = getRandomInt(0, 25) * grid;
+        endGame();
+        return;
       }
     }
   });
 }
 
-// listen to keyboard events to move the snake
-document.addEventListener('keydown', function(e) {
-  // prevent snake from backtracking on itself by checking that it's 
-  // not already moving on the same axis (pressing left while moving
-  // left won't do anything, and pressing right while moving left
-  // shouldn't let you collide with your own body)
-  
-  // left arrow key
+document.addEventListener('keydown', function (e) {
+  // Prevent default scrolling for arrow keys
+  if ([37, 38, 39, 40].indexOf(e.which) > -1) {
+    e.preventDefault();
+  }
+
+  // Pause Shortcut (P or Space)
+  if (e.code === 'Space' || e.code === 'KeyP') {
+    if (startModal.classList.contains('hidden') && modal.classList.contains('hidden')) {
+      togglePause();
+    }
+  }
+
   if (e.which === 37 && snake.dx === 0) {
     snake.dx = -grid;
     snake.dy = 0;
   }
-  // up arrow key
   else if (e.which === 38 && snake.dy === 0) {
     snake.dy = -grid;
     snake.dx = 0;
   }
-  // right arrow key
   else if (e.which === 39 && snake.dx === 0) {
     snake.dx = grid;
     snake.dy = 0;
   }
-  // down arrow key
   else if (e.which === 40 && snake.dy === 0) {
     snake.dy = grid;
     snake.dx = 0;
   }
 });
 
-// start the game
-requestAnimationFrame(loop);
+// Mobile Controls Logic
+var upBtn = document.getElementById('upBtn');
+var leftBtn = document.getElementById('leftBtn');
+var downBtn = document.getElementById('downBtn');
+var rightBtn = document.getElementById('rightBtn');
+
+// Helper to set direction
+function setDirection(direction) {
+  if (direction === 'left' && snake.dx === 0) {
+    snake.dx = -grid;
+    snake.dy = 0;
+  } else if (direction === 'up' && snake.dy === 0) {
+    snake.dy = -grid;
+    snake.dx = 0;
+  } else if (direction === 'right' && snake.dx === 0) {
+    snake.dx = grid;
+    snake.dy = 0;
+  } else if (direction === 'down' && snake.dy === 0) {
+    snake.dy = grid;
+    snake.dx = 0;
+  }
+}
+
+// Attach listeners (using pointerdown for faster response than click)
+upBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); setDirection('up'); });
+leftBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); setDirection('left'); });
+downBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); setDirection('down'); });
+rightBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); setDirection('right'); });
+
+// Difficulty Selection Logic
+difficultyBtns.forEach(btn => {
+  btn.addEventListener('click', function () {
+    // Remove selected class from all
+    difficultyBtns.forEach(b => b.classList.remove('selected'));
+    // Add to clicked
+    this.classList.add('selected');
+
+    // Update settings
+    loopSpeed = parseInt(this.dataset.speed);
+    hasObstacles = this.dataset.obstacles === 'true';
+  });
+});
+
+pauseBtn.addEventListener('click', togglePause);
+
+function startGame() {
+  startModal.classList.add('hidden');
+  // Ensure audio context is ready on user interaction
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(e => console.log(e));
+  }
+  resetGame();
+}
+
+restartBtn.addEventListener('click', resetGame);
+homeBtn.addEventListener('click', goHome);
+startBtn.addEventListener('click', startGame);
